@@ -1,0 +1,187 @@
+--- a/src/GstCameraPlugin.cc
++++ b/src/GstCameraPlugin.cc
+@@ -20,8 +20,10 @@
+ #include <gst/app/gstappsrc.h>
+ #include <gst/gst.h>
+ 
++#include <atomic>
+ #include <iostream>
+ #include <memory>
++#include <mutex>
+ #include <string>
+ #include <thread>
+ #include <vector>
+@@ -61,6 +63,24 @@
+     void StopStreaming();
+     void StopGstThread();
+ 
++    // --- B1 patch: image-topic subscription follows enable state ---
++    // See ReconcileStreamingState() for the design: OnVideoStreamEnable()
++    // only records desiredStreaming; every actual transition (subscribe,
++    // unsubscribe, GStreamer start/stop) happens on the simulation thread
++    // in PreUpdate. v1 of this patch did the transitions inside the
++    // gz-transport callback itself, and calling node.Subscribe()/
++    // node.Unsubscribe() (and joining the GStreamer thread) from a
++    // transport callback thread intermittently wedged message dispatch --
++    // enables/disables then appeared to be "lost" for minutes at a time
++    // under reader-driven toggling.
++    void SubscribeImage();
++    void UnsubscribeImage();
++    void ReconcileStreamingState();
++    std::mutex imageSubMutex;
++    bool imageSubscribed{false};
++    std::atomic<bool> desiredStreaming{false};
++    // --- end B1 patch ---
++
+     std::string udpHost{"127.0.0.1"};
+     int udpPort{5600};
+     bool useRtmpPipeline{false};
+@@ -77,8 +97,13 @@
+     unsigned int rate{5};
+ 
+     pthread_t threadId;
+-    bool isGstMainLoopActive{false};
+-    bool requestedStartStreaming{false};
++    // B1 patch: atomics -- isGstMainLoopActive is written by the GStreamer
++    // thread (around g_main_loop_run) and read from the simulation thread
++    // (ReconcileStreamingState) and transport thread (OnImage);
++    // requestedStartStreaming is written from the simulation thread and
++    // consumed on the transport thread (OnImage).
++    std::atomic<bool> isGstMainLoopActive{false};
++    std::atomic<bool> requestedStartStreaming{false};
+ 
+     GMainLoop *gst_loop{nullptr};
+     GstElement *source{nullptr};
+@@ -225,9 +250,20 @@
+         gzmsg << "GstCameraPlugin: enable topic ["
+               << impl->enableTopic << "]" << std::endl;
+ 
+-        // subscribe to gazebo topics
+-        impl->node.Subscribe(impl->imageTopic,
+-            &GstCameraPlugin::Impl::OnImage, impl.get());
++        // B1 patch: do NOT subscribe to the image topic here unconditionally.
++        // Upstream did, which means the camera sensor always has a listener
++        // and gz-sensors' CameraSensor::Update() therefore never takes its
++        // "nothing is listening, skip Render()" fast path -- <enable_topic>
++        // then only gates the GStreamer encode thread, not the render
++        // itself. Measured effect: two cameras rendering simultaneously
++        // drop sim RTF from ~0.92 (one camera) to ~0.44, which is
++        // disqualifying for SITL. Instead, only the enable topic is
++        // subscribed here; the image-topic subscription follows the enable
++        // state (see ReconcileStreamingState below), so a disabled camera
++        // has zero subscribers and gz-sensors stops rendering it. The
++        // plugin therefore starts in the "disabled" state, matching
++        // <enable_topic>'s existing semantics (streaming already required
++        // an explicit "enable" message before this patch).
+         impl->node.Subscribe(impl->enableTopic,
+             &GstCameraPlugin::Impl::OnVideoStreamEnable, impl.get());
+ 
+@@ -239,7 +275,79 @@
+         impl->InitializeCamera();
+         return;
+     }
++
++    // B1 patch: apply any pending enable/disable transition on the
++    // simulation thread, once per step.
++    impl->ReconcileStreamingState();
++}
++
++// --- B1 patch ---
++void GstCameraPlugin::Impl::SubscribeImage()
++{
++    std::lock_guard<std::mutex> lock(imageSubMutex);
++    if (!imageSubscribed)
++    {
++        node.Subscribe(imageTopic, &GstCameraPlugin::Impl::OnImage, this);
++        imageSubscribed = true;
++    }
++}
++
++void GstCameraPlugin::Impl::UnsubscribeImage()
++{
++    std::lock_guard<std::mutex> lock(imageSubMutex);
++    if (imageSubscribed)
++    {
++        node.Unsubscribe(imageTopic);
++        imageSubscribed = false;
++    }
++}
++
++void GstCameraPlugin::Impl::ReconcileStreamingState()
++{
++    // Runs on the simulation thread every PreUpdate. OnVideoStreamEnable()
++    // only records desiredStreaming; acting on it here keeps every
++    // node.Subscribe()/node.Unsubscribe() call and every GStreamer-thread
++    // join off the gz-transport callback thread (v1 of this patch did both
++    // inside the callback and intermittently wedged message dispatch), and
++    // makes repeated publishes of the same state idempotent, so a gate
++    // that re-publishes its desired state periodically is safe.
++    const bool desired = desiredStreaming.load();
++
++    if (desired)
++    {
++        {
++            std::lock_guard<std::mutex> lock(imageSubMutex);
++            if (imageSubscribed)
++            {
++                return;
++            }
++        }
++        // Subscribing is what turns rendering on (gz-sensors renders only
++        // while the image topic has connections); OnImage() then starts
++        // the GStreamer thread on the first frame, when the actual width/
++        // height are known.
++        requestedStartStreaming = true;
++        SubscribeImage();
++    }
++    else
++    {
++        requestedStartStreaming = false;
++        // Unsubscribe first: connection count drops to zero and gz-sensors
++        // stops rendering this camera -- the CPU cost the render gate
++        // exists to eliminate.
++        UnsubscribeImage();
++        // Then stop the encode thread, if its main loop is up. A GStreamer
++        // thread still mid-initialisation (spawned by OnImage, main loop
++        // not yet running) can't be stopped this tick; isGstMainLoopActive
++        // flips true a moment later and the next PreUpdate pass lands
++        // here again and stops it then.
++        if (isGstMainLoopActive)
++        {
++            StopStreaming();
++        }
++    }
+ }
++// --- end B1 patch ---
+ 
+ void GstCameraPlugin::Impl::InitializeCamera()
+ {
+@@ -546,19 +654,19 @@
+ {
+     gzmsg << "GstCameraPlugin:: streaming: "
+           << (msg.data() ? "started" : "stopped")  << std::endl;
+-    if (msg.data())
+-    {
+-      requestedStartStreaming = true;
+-    }
+-    else
+-    {
+-      requestedStartStreaming = false;
+-      StopStreaming();
+-    }
++    // B1 patch: record only. This runs on a gz-transport callback thread;
++    // the transition itself (subscribe/unsubscribe, GStreamer start/stop)
++    // is applied by ReconcileStreamingState() on the simulation thread in
++    // the next PreUpdate.
++    desiredStreaming = msg.data();
+ }
+ 
+ void GstCameraPlugin::Impl::OnRenderTeardown()
+ {
++    // B1 patch: also drop the image subscription on teardown, in case the
++    // scene is torn down while the camera is still enabled.
++    desiredStreaming = false;
++    UnsubscribeImage();
+     StopStreaming();
+     camera.reset();
+     scene.reset();

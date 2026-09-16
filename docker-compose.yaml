@@ -1,0 +1,396 @@
+# Every host-visible and network-visible value is driven by an environment
+# variable so the same file can run several independent stacks side by side:
+#
+#   docker compose up -d                                  # instance 1 (.env)
+#   docker compose -p sim2 --env-file .env.sim2 up -d     # instance 2
+#
+# The defaults below reproduce the original single-instance layout, so a plain
+# `docker compose up -d` needs nothing but EXTERNAL_IP. See .env.example for
+# what each variable does, and README "Running more than one instance".
+#
+# Services deliberately have no `container_name:` — that name is a *global*
+# Docker namespace and would collide between instances. Compose names them
+# `<project>-<service>-1` instead; address them by service name as usual
+# (`docker compose logs -f mavrouter`).
+#
+# cam1/cam2 and gazebo/gzcam1/gzcam2 carry a `profiles:` tag and are
+# mutually exclusive: "demo" (today's synthetic test-pattern cams) or
+# "gazebo" (headless Gazebo Harmonic physics + cameras). A service with a
+# `profiles:` key does NOT start unless that profile is active, so
+# COMPOSE_PROFILES=demo is set as the default in .env/.env.example/
+# .env.sim2 — that is what makes a bare `docker compose up -d` still bring
+# up exactly today's stack. Run the other with
+# `COMPOSE_PROFILES=gazebo docker compose up -d` (also set SITL_MODEL; see
+# the autopilot service and README "Gazebo profile").
+services:
+  mediaserver:
+    image: bluenviron/mediamtx:latest
+    restart: unless-stopped
+    networks:
+      sim:
+        ipv4_address: ${NET_PREFIX:-172.28}.0.11
+    environment:
+      # Move the in-container listeners to the same numbers as the published
+      # host ports. RTSP negotiates the server's RTP/RTCP ports in-band, so
+      # remapping only the host side would advertise ports that are not
+      # forwarded and RTSP-over-UDP would break on the second instance.
+      MTX_RTSPADDRESS: ":${RTSP_PORT:-8554}"
+      MTX_RTPADDRESS: ":${RTP_PORT:-8000}"
+      MTX_RTCPADDRESS: ":${RTCP_PORT:-8001}"
+      # Gazebo profile only: render gate (blocker B2, see
+      # gazebo/gazebo-sitl-plan.html "Blockers"). The original design gated
+      # rendering with a per-path MTX_PATHS_*_RUNONDEMAND hook running
+      # `gz topic ...`, but that can never work: bluenviron/mediamtx is built
+      # FROM scratch (no shell, no `gz` CLI) and execs runOnDemand commands
+      # directly (confirmed in internal/externalcmd/cmd_os.go), so the hook
+      # fails with "exec: file not found". Inverted instead: the gazebo
+      # service polls this API for reader counts and toggles its own cameras
+      # (see gazebo/docker/camera_gate.py) -- mediamtx only needs to answer
+      # read-only GET requests, nothing execs inside it.
+      #
+      # The API is OFF by default (verified against a running container --
+      # no :9997 listener without this). MTX_API is demo-profile-harmless:
+      # cam1/cam2 publish continuously regardless of who's asking the API
+      # about them.
+      MTX_API: "yes"
+      # mediamtx's default internal-user config permits the "api" action
+      # (and metrics/pprof) only from 127.0.0.1/::1 -- a request from the
+      # gazebo container's IP otherwise gets back
+      # {"status":"error","error":"authentication error"} (verified against
+      # a running container). Index 1 is that api/metrics/pprof user; widen
+      # its IPs to the whole sim subnet so any service on this network can
+      # poll it. An EMPTY value is rejected at mediamtx startup ("ERR:
+      # unable to parse IP/CIDR ''"), unlike the old RUNONDEMAND vars this
+      # replaces -- it cannot be left unset.
+      MTX_AUTHINTERNALUSERS_1_IPS: ${NET_PREFIX:-172.28}.0.0/16
+    ports:
+      - "${RTSP_PORT:-8554}:${RTSP_PORT:-8554}/tcp"
+      - "${RTP_PORT:-8000}:${RTP_PORT:-8000}/udp"
+      - "${RTCP_PORT:-8001}:${RTCP_PORT:-8001}/udp"
+
+  autopilot:
+    image: ardupilot-sitl:latest
+    restart: unless-stopped
+    networks:
+      sim:
+        ipv4_address: ${NET_PREFIX:-172.28}.0.20
+    environment:
+      # demo profile (default): built-in physics, e.g. "quad". gazebo
+      # profile: point SITL at the gazebo service's JSON FDM link instead --
+      # set SITL_MODEL=JSON:172.28.0.30 (or JSON:<NET_PREFIX>.0.30 for a
+      # non-default NET_PREFIX). Verified against ArduPilot's own
+      # libraries/SITL/examples/JSON/readme.md: "--model JSON:127.0.0.1"
+      # embeds the physics-backend IP; ArduPilot then listens for FDM state
+      # and sends servo output to that IP on its compiled-in default ports
+      # (9003 in / 9002 out -- see libraries/AP_HAL_SITL/SITL_cmdline.cpp),
+      # which is why the defaults line up with GZ_FDM_IN_PORT/GZ_FDM_OUT_PORT
+      # below without needing extra flags. NOTE: this repo's entrypoint only
+      # passes --model through, so a NET_PREFIX or GZ_FDM_*_PORT override
+      # away from the defaults is NOT picked up here -- see README gazebo
+      # section and R7 in the plan (multi-instance gazebo is unverified).
+      # `profiles:` on cam1/cam2/gazebo/gzcam1/gzcam2 make this an either/or:
+      # COMPOSE_PROFILES=demo (the default, set in .env) keeps today's
+      # behaviour; COMPOSE_PROFILES=gazebo swaps in this path instead.
+      SITL_MODEL: ${SITL_MODEL:-quad}
+      # Literal IPv4, not the "mavrouter" hostname: the sim network is
+      # dual-stack and Docker DNS returns the AAAA (IPv6) record first,
+      # which ArduPilot's "udpclient:ADDR:PORT" parser cannot handle.
+      SITL_ADDR: ${NET_PREFIX:-172.28}.0.10
+      SITL_PORT: "24042"
+    depends_on:
+      - mavrouter
+
+  # --------------------------------------------------------------- demo ---
+  # Synthetic test-pattern cameras -- today's behaviour. Active whenever the
+  # "demo" profile is enabled; COMPOSE_PROFILES=demo in .env/.env.example/
+  # .env.sim2 makes that the default so a bare `docker compose up -d` still
+  # brings up exactly this pair (see the CRITICAL note in .env.example).
+  cam1:
+    image: tools:latest
+    restart: unless-stopped
+    profiles: [demo]
+    # demo_video_source.py runs from the IMAGE unless mounted, exactly like
+    # set_serial_number.py did before it bit us: the gzcam services pass
+    # --video-source/--rtp-port/--camera-* flags that only exist in this
+    # tree's copy, so without this mount they crash-loop on "unrecognized
+    # arguments". Mounted on the demo cams too so the tree stays the single
+    # source of truth for the script (its --video-source=test path is
+    # byte-identical to the image's behaviour).
+    volumes:
+      - ./tools/demo_video_source.py:/app/demo_video_source.py:ro
+    networks:
+      sim:
+        ipv4_address: ${NET_PREFIX:-172.28}.0.21
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command:
+      - python3
+      - demo_video_source.py
+      - --host
+      - ${NET_PREFIX:-172.28}.0.10
+      - --port
+      - "24042"
+      - --component-id
+      - "103"
+      - --stream-id
+      - "1"
+      - --rtsp-uri
+      - rtsp://${NET_PREFIX:-172.28}.0.11:${RTSP_PORT:-8554}/cam1
+      - --notif-uri
+      - rtsp://${EXTERNAL_IP:-127.0.0.1}:${RTSP_PORT:-8554}/cam1
+    depends_on:
+      - mavrouter
+      - mediaserver
+
+  cam2:
+    image: tools:latest
+    restart: unless-stopped
+    profiles: [demo]
+    # demo_video_source.py runs from the IMAGE unless mounted, exactly like
+    # set_serial_number.py did before it bit us: the gzcam services pass
+    # --video-source/--rtp-port/--camera-* flags that only exist in this
+    # tree's copy, so without this mount they crash-loop on "unrecognized
+    # arguments". Mounted on the demo cams too so the tree stays the single
+    # source of truth for the script (its --video-source=test path is
+    # byte-identical to the image's behaviour).
+    volumes:
+      - ./tools/demo_video_source.py:/app/demo_video_source.py:ro
+    networks:
+      sim:
+        ipv4_address: ${NET_PREFIX:-172.28}.0.22
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command:
+      - python3
+      - demo_video_source.py
+      - --host
+      - ${NET_PREFIX:-172.28}.0.10
+      - --port
+      - "24042"
+      - --component-id
+      - "104"
+      - --stream-id
+      - "1"
+      - --rtsp-uri
+      - rtsp://${NET_PREFIX:-172.28}.0.11:${RTSP_PORT:-8554}/cam2
+      - --notif-uri
+      - rtsp://${EXTERNAL_IP:-127.0.0.1}:${RTSP_PORT:-8554}/cam2
+
+    depends_on:
+      - mavrouter
+      - mediaserver
+
+  # ------------------------------------------------------------ gazebo ---
+  # Headless Gazebo Harmonic physics + forward/down cameras, replacing the
+  # demo cams' pixels (the MAVLink camera protocol -- comp 103/104 -- is
+  # unchanged; gzcam1/gzcam2 run the same support-tools image and script as
+  # cam1/cam2). Active only when the "gazebo" profile is enabled:
+  # `COMPOSE_PROFILES=gazebo docker compose up -d` (also set SITL_MODEL --
+  # see the autopilot service above). Image does not exist in the registry
+  # yet -- see .github/workflows/gazebo-sitl.yaml.
+  gazebo:
+    image: gazebo-sitl:${GZ_TAG:-latest}
+    restart: unless-stopped
+    profiles: [gazebo]
+    networks:
+      sim:
+        ipv4_address: ${NET_PREFIX:-172.28}.0.30
+    environment:
+      # ArduPilotPlugin JSON FDM link. Defaults verified against ArduPilot's
+      # compiled-in --sim-port-in/--sim-port-out defaults (SITL_cmdline.cpp:
+      # SIM_IN_PORT=9003, SIM_OUT_PORT=9002) and ardupilot_gazebo's
+      # models/iris_with_ardupilot/model.sdf (<fdm_port_in>9002</fdm_port_in>).
+      # None of these are published to the host -- container-to-container
+      # only, per the shared contract.
+      GZ_FDM_IN_PORT: ${GZ_FDM_IN_PORT:-9002}
+      GZ_FDM_OUT_PORT: ${GZ_FDM_OUT_PORT:-9003}
+      # RTP targets for the forward (gzcam1) / down (gzcam2) GstCameraPlugin
+      # sensors. GZ_CAM1_HOST/GZ_CAM2_HOST must be set explicitly, not left
+      # to entrypoint.sh's own fallback: that fallback is hardcoded to
+      # 172.28.0.31/.32 (this file's own NET_PREFIX default), so on any
+      # instance with a non-default NET_PREFIX the camera plugin would
+      # silently keep sending RTP to a hardcoded address that resolves to
+      # nothing on THIS instance's network -- gzcam1/gzcam2 would never
+      # see a single packet and the render-gate placeholder would spin
+      # forever without ever confirming real RTP (measured: this is exactly
+      # what happened before this was wired up -- see
+      # support-tools/demo_video_source.py's _await_rtp_traffic). Matches
+      # gzcam1/gzcam2's own static addresses below (.0.31/.0.32).
+      GZ_CAM1_HOST: ${NET_PREFIX:-172.28}.0.31
+      GZ_CAM2_HOST: ${NET_PREFIX:-172.28}.0.32
+      GZ_CAM1_RTP_PORT: ${GZ_CAM1_RTP_PORT:-5600}
+      GZ_CAM2_RTP_PORT: ${GZ_CAM2_RTP_PORT:-5601}
+      # So the image's entrypoint can derive gzcam1/gzcam2's addresses
+      # (.0.31/.0.32) for the RTP targets without hardcoding them, and so
+      # camera_gate.py (below) can derive the mediaserver's address
+      # (<NET_PREFIX>.0.11) the same way the rest of this file does.
+      NET_PREFIX: ${NET_PREFIX:-172.28}
+      # Render gate (blocker B2 fix, see gazebo/gazebo-sitl-plan.html and
+      # gazebo/docker/camera_gate.py): this container polls mediaserver's
+      # HTTP API for each camera path's reader count and enables/disables
+      # the matching Gazebo camera sensor -- replaces the dead
+      # MTX_PATHS_*_RUNONDEMAND approach on the mediaserver service above.
+      # Host is left empty by default so the script derives
+      # "<NET_PREFIX>.0.11" itself; override only if the mediaserver ever
+      # needs to live somewhere else.
+      GZ_CAMERA_GATE_MEDIASERVER_HOST: ${GZ_CAMERA_GATE_MEDIASERVER_HOST:-}
+      GZ_CAMERA_GATE_MEDIASERVER_PORT: ${GZ_CAMERA_GATE_MEDIASERVER_PORT:-9997}
+      GZ_CAMERA_GATE_INTERVAL: ${GZ_CAMERA_GATE_INTERVAL:-2}
+      GZ_CAMERA_GATE_TIMEOUT: ${GZ_CAMERA_GATE_TIMEOUT:-2}
+      # Seconds of continuous zero readers before a camera is disabled
+      # (enable is immediate). The reader that triggers the bridge's
+      # placeholder->RTP switch is dropped BY that switch, so disabling on
+      # the first zero-reader poll would tear the camera down mid-switch
+      # every time; this is the moral equivalent of the plan's original
+      # MediaMTX runOnDemandCloseAfter: 10s.
+      GZ_CAMERA_GATE_DISABLE_HOLD: ${GZ_CAMERA_GATE_DISABLE_HOLD:-10}
+      GZ_CAMERA_GATE_PATHS: ${GZ_CAMERA_GATE_PATHS:-cam1:/cam1/enable,cam2:/cam2/enable}
+      # gz sim console verbosity 0-4 (image default 1). Bump to 3+ to see
+      # GstCameraPlugin's own gzmsg lines ("streaming: started/stopped",
+      # per-camera pipeline events) when debugging the render gate.
+      GZ_VERBOSITY: ${GZ_VERBOSITY:-1}
+
+  gzcam1:
+    image: tools:latest
+    restart: unless-stopped
+    profiles: [gazebo]
+    # demo_video_source.py runs from the IMAGE unless mounted, exactly like
+    # set_serial_number.py did before it bit us: the gzcam services pass
+    # --video-source/--rtp-port/--camera-* flags that only exist in this
+    # tree's copy, so without this mount they crash-loop on "unrecognized
+    # arguments". Mounted on the demo cams too so the tree stays the single
+    # source of truth for the script (its --video-source=test path is
+    # byte-identical to the image's behaviour).
+    volumes:
+      - ./tools/demo_video_source.py:/app/demo_video_source.py:ro
+    networks:
+      sim:
+        ipv4_address: ${NET_PREFIX:-172.28}.0.31
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command:
+      - python3
+      - demo_video_source.py
+      - --host
+      - ${NET_PREFIX:-172.28}.0.10
+      - --port
+      - "24042"
+      - --component-id
+      - "103"
+      - --stream-id
+      - "1"
+      - --rtsp-uri
+      - rtsp://${NET_PREFIX:-172.28}.0.11:${RTSP_PORT:-8554}/cam1
+      - --notif-uri
+      - rtsp://${EXTERNAL_IP:-127.0.0.1}:${RTSP_PORT:-8554}/cam1
+      - --video-source
+      - rtp
+      - --rtp-port
+      - "${GZ_CAM1_RTP_PORT:-5600}"
+      - --camera-vendor
+      - FRAVIOFII
+      - --camera-model
+      - "DF SIM FORWARD"
+      # Render-gate bootstrap placeholder (see support-tools/demo_video_source.py
+      # module docstring and README "Gazebo profile" -- without this, cam1
+      # never gets its first reader because the Gazebo camera and this
+      # placeholder are each waiting on the other to go first). Mediaserver
+      # host/path are derived from --rtsp-uri above, not passed separately.
+      - --placeholder-width
+      - "${GZ_CAM_PLACEHOLDER_WIDTH:-320}"
+      - --placeholder-height
+      - "${GZ_CAM_PLACEHOLDER_HEIGHT:-240}"
+      - --placeholder-fps
+      - "${GZ_CAM_PLACEHOLDER_FPS:-5}"
+      - --rtp-grace-period
+      - "${GZ_CAM_RTP_GRACE_PERIOD:-8}"
+      - --rtp-revert-hold
+      - "${GZ_CAM_RTP_REVERT_HOLD:-10}"
+      - --gate-poll-period
+      - "${GZ_CAM_GATE_POLL_PERIOD:-2}"
+      - --gate-poll-timeout
+      - "${GZ_CAM_GATE_POLL_TIMEOUT:-2}"
+      - --mediaserver-api-port
+      - "${GZ_CAMERA_GATE_MEDIASERVER_PORT:-9997}"
+    depends_on:
+      - mavrouter
+      - mediaserver
+      - gazebo
+
+  gzcam2:
+    image: tools:latest
+    restart: unless-stopped
+    profiles: [gazebo]
+    # demo_video_source.py runs from the IMAGE unless mounted, exactly like
+    # set_serial_number.py did before it bit us: the gzcam services pass
+    # --video-source/--rtp-port/--camera-* flags that only exist in this
+    # tree's copy, so without this mount they crash-loop on "unrecognized
+    # arguments". Mounted on the demo cams too so the tree stays the single
+    # source of truth for the script (its --video-source=test path is
+    # byte-identical to the image's behaviour).
+    volumes:
+      - ./tools/demo_video_source.py:/app/demo_video_source.py:ro
+    networks:
+      sim:
+        ipv4_address: ${NET_PREFIX:-172.28}.0.32
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command:
+      - python3
+      - demo_video_source.py
+      - --host
+      - ${NET_PREFIX:-172.28}.0.10
+      - --port
+      - "24042"
+      - --component-id
+      - "104"
+      - --stream-id
+      - "1"
+      - --rtsp-uri
+      - rtsp://${NET_PREFIX:-172.28}.0.11:${RTSP_PORT:-8554}/cam2
+      - --notif-uri
+      - rtsp://${EXTERNAL_IP:-127.0.0.1}:${RTSP_PORT:-8554}/cam2
+      - --video-source
+      - rtp
+      - --rtp-port
+      - "${GZ_CAM2_RTP_PORT:-5601}"
+      - --camera-vendor
+      - FRAVIOFII
+      - --camera-model
+      - "DF SIM DOWN"
+      # Render-gate bootstrap placeholder -- see the matching block on
+      # gzcam1 above for why this exists.
+      - --placeholder-width
+      - "${GZ_CAM_PLACEHOLDER_WIDTH:-320}"
+      - --placeholder-height
+      - "${GZ_CAM_PLACEHOLDER_HEIGHT:-240}"
+      - --placeholder-fps
+      - "${GZ_CAM_PLACEHOLDER_FPS:-5}"
+      - --rtp-grace-period
+      - "${GZ_CAM_RTP_GRACE_PERIOD:-8}"
+      - --rtp-revert-hold
+      - "${GZ_CAM_RTP_REVERT_HOLD:-10}"
+      - --gate-poll-period
+      - "${GZ_CAM_GATE_POLL_PERIOD:-2}"
+      - --gate-poll-timeout
+      - "${GZ_CAM_GATE_POLL_TIMEOUT:-2}"
+      - --mediaserver-api-port
+      - "${GZ_CAMERA_GATE_MEDIASERVER_PORT:-9997}"
+    depends_on:
+      - mavrouter
+      - mediaserver
+      - gazebo
+
+networks:
+  sim:
+    driver: bridge
+    enable_ipv6: true
+    ipam:
+      config:
+        # Static service IPs live in ${NET_PREFIX}.0.0/24; ip_range keeps
+        # Docker's dynamic pool clear of them so ad-hoc containers can't grab a
+        # reserved address. Each instance needs its own NET_PREFIX and
+        # NET6_SUBNET — overlapping pools are rejected by the daemon.
+        - subnet: ${NET_PREFIX:-172.28}.0.0/16
+          ip_range: ${NET_PREFIX:-172.28}.5.0/24
+        - subnet: ${NET6_SUBNET:-fd00:df:5117::/64}

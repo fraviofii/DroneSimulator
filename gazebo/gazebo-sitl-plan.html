@@ -1,0 +1,639 @@
+<title>Headless Gazebo Rig</title>
+<style>
+  :root{
+    --ground:#F1F4F4; --surface:#FFFFFF; --surface-2:#E6ECEC; --line:#D2DCDC;
+    --ink:#12191A; --ink-2:#33403F; --muted:#5C6B6C;
+    --accent:#0E6F6B; --accent-soft:#D7E8E6; --accent-line:#8FC4BF;
+    --risk:#A63328; --risk-soft:#F6E1DE;
+    --warn:#8A6410; --warn-soft:#F6EBD4;
+    --ok:#2E6B4F; --ok-soft:#DCEBE2;
+    --shadow:0 1px 2px rgba(18,25,26,.05), 0 8px 24px -12px rgba(18,25,26,.18);
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"Cascadia Mono","Cascadia Code",Consolas,"SF Mono",Menlo,monospace;
+  }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --ground:#0E1414; --surface:#161E1E; --surface-2:#202A2A; --line:#2C3838;
+      --ink:#E6EDEC; --ink-2:#C2CFCE; --muted:#90A1A1;
+      --accent:#4FBFB6; --accent-soft:#143230; --accent-line:#2E6B66;
+      --risk:#E8877C; --risk-soft:#33201D;
+      --warn:#D6A64A; --warn-soft:#2E2517;
+      --ok:#6FBF8E; --ok-soft:#16291F;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#0E1414; --surface:#161E1E; --surface-2:#202A2A; --line:#2C3838;
+    --ink:#E6EDEC; --ink-2:#C2CFCE; --muted:#90A1A1;
+    --accent:#4FBFB6; --accent-soft:#143230; --accent-line:#2E6B66;
+    --risk:#E8877C; --risk-soft:#33201D;
+    --warn:#D6A64A; --warn-soft:#2E2517;
+    --ok:#6FBF8E; --ok-soft:#16291F;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1060px; margin-inline:auto; padding:clamp(24px,5vw,64px) clamp(18px,4vw,40px) 80px}
+  .prose{max-width:68ch}
+
+  h1,h2,h3{font-family:var(--serif); text-wrap:balance; margin:0; font-weight:600}
+  h1{font-size:clamp(34px,5.2vw,52px); line-height:1.08; letter-spacing:-.015em}
+  h2{font-size:clamp(23px,3vw,30px); line-height:1.18; letter-spacing:-.01em}
+  h3{font-size:18px; line-height:1.3}
+  p{margin:0}
+
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--muted); margin:0;
+  }
+
+  .masthead{display:flex; flex-direction:column; gap:18px; padding-bottom:28px; border-bottom:2px solid var(--ink)}
+  .standfirst{font-size:19px; line-height:1.55; color:var(--ink-2); max-width:60ch}
+  .meta{display:flex; flex-wrap:wrap; gap:8px 28px; font-family:var(--mono); font-size:12px; color:var(--muted)}
+  .meta b{color:var(--ink-2); font-weight:500}
+
+  section{margin-top:clamp(44px,6vw,68px); display:flex; flex-direction:column; gap:20px}
+  .sec-head{display:flex; flex-direction:column; gap:7px}
+
+  .verdict{
+    background:var(--accent-soft); border:1px solid var(--accent-line);
+    border-left:4px solid var(--accent); border-radius:3px;
+    padding:22px 26px; display:flex; flex-direction:column; gap:12px;
+  }
+  .verdict h2{font-size:22px; color:var(--accent)}
+  .verdict p{max-width:64ch; color:var(--ink-2)}
+
+  .cards{display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:16px}
+  .card{
+    background:var(--surface); border:1px solid var(--line); border-radius:3px;
+    padding:20px; display:flex; flex-direction:column; gap:11px; box-shadow:var(--shadow);
+  }
+  .card h3{color:var(--ink)}
+  .card p{font-size:14.5px; color:var(--ink-2)}
+  .tag{
+    align-self:flex-start; font-family:var(--mono); font-size:10px; letter-spacing:.11em;
+    text-transform:uppercase; padding:3px 8px; border-radius:2px;
+    background:var(--ok-soft); color:var(--ok); border:1px solid currentColor;
+  }
+  .tag.gap{background:var(--warn-soft); color:var(--warn)}
+  .tag.win{background:var(--accent-soft); color:var(--accent)}
+
+  pre{
+    margin:0; background:var(--surface-2); border:1px solid var(--line); border-radius:3px;
+    padding:13px 15px; overflow-x:auto; font-family:var(--mono); font-size:12.5px;
+    line-height:1.65; color:var(--ink-2);
+  }
+  code{font-family:var(--mono); font-size:.9em; background:var(--surface-2);
+       padding:1.5px 5px; border-radius:2px; color:var(--ink-2)}
+  pre code{background:none; padding:0; font-size:inherit}
+  .cm{color:var(--muted)}
+  .hl{color:var(--accent); font-weight:600}
+
+  .tw{overflow-x:auto; border:1px solid var(--line); border-radius:3px; background:var(--surface)}
+  table{border-collapse:collapse; width:100%; min-width:640px; font-size:14.5px}
+  th,td{text-align:left; padding:12px 16px; border-bottom:1px solid var(--line); vertical-align:top}
+  thead th{
+    font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--muted); font-weight:500; background:var(--surface-2); white-space:nowrap;
+  }
+  tbody tr:last-child td{border-bottom:none}
+  td.mono,th.mono{font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums}
+  .phase-id{font-family:var(--mono); font-weight:600; color:var(--accent); white-space:nowrap}
+
+  .chip{
+    display:inline-block; font-family:var(--mono); font-size:10.5px; letter-spacing:.08em;
+    text-transform:uppercase; padding:3px 9px; border-radius:2px; white-space:nowrap;
+  }
+  .chip.high{background:var(--risk-soft); color:var(--risk)}
+  .chip.med{background:var(--warn-soft); color:var(--warn)}
+  .chip.low{background:var(--ok-soft); color:var(--ok)}
+
+  figure{margin:0; display:flex; flex-direction:column; gap:12px}
+  .figbox{background:var(--surface); border:1px solid var(--line); border-radius:3px;
+          padding:22px 18px; overflow-x:auto}
+  svg.diagram{display:block; width:100%; min-width:680px; max-width:100%; height:auto; color:var(--ink-2)}
+  figcaption{font-size:13.5px; color:var(--muted); max-width:64ch}
+
+  .gate{
+    border:1px dashed var(--warn); background:var(--warn-soft); border-radius:3px;
+    padding:16px 20px; display:flex; flex-direction:column; gap:6px;
+  }
+  .gate .eyebrow{color:var(--warn)}
+  .gate p{font-size:14.5px; color:var(--ink-2); max-width:64ch}
+
+  ul{margin:0; padding-left:20px; display:flex; flex-direction:column; gap:9px}
+  li{font-size:15px; color:var(--ink-2)}
+  li strong{color:var(--ink); font-weight:600}
+  .note{font-size:15px; color:var(--ink-2)}
+
+  footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line);
+         font-size:13px; color:var(--muted); display:flex; flex-direction:column; gap:8px}
+  footer a{color:var(--accent)}
+  :focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important; transition:none!important}}
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Draganfly &middot; simulation_environment &middot; feasibility &amp; implementation plan</p>
+    <h1>Headless Gazebo, two cameras</h1>
+    <p class="standfirst">Replacing the synthetic demo cameras with a headless Gazebo world driving ArduPilot SITL, streaming through <code>GstCameraPlugin</code> &mdash; so test flights have something real to navigate by.</p>
+    <div class="meta">
+      <span><b>Status</b> Working end-to-end on sim1 &mdash; registry image pending first <code>gazebo-v*</code> tag</span>
+      <span><b>Target host</b> Windows 11 &middot; Docker Desktop</span>
+      <span><b>Verdict</b> GO, at a revised frame rate</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="verdict">
+      <h2>Feasible &mdash; and one constraint makes it comfortably so</h2>
+      <p>Gazebo can drive SITL and deliver camera views into the existing RTSP path. Two things shape the design. First, <strong>&ldquo;replace the demo_video_source containers&rdquo; is really &ldquo;re-source the pixels&rdquo;</strong>: those containers also speak the entire MAVLink camera protocol, and <code>GstCameraPlugin</code> speaks none of it. The MAVLink half has to survive, or QGC and DGCS lose camera discovery.</p>
+      <p>Second &mdash; and decisively &mdash; <strong>only one stream is ever watched at a time, and selection happens when the client connects to an RTSP path.</strong> That turns the hardest constraint into the cheapest design: MediaMTX already fires hooks on reader connect and disconnect, so a camera renders only while someone is actually watching it. Peak render load is one camera, not two, and an idle rig costs nothing but physics.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">P0 &mdash; measured</p>
+      <h2>What this box actually does</h2>
+    </div>
+    <div class="prose">
+      <p class="note">Measured on the real image (Gazebo Harmonic, llvmpipe software rendering) with ArduPilot SITL connected over the JSON FDM link. Real-time factor is the number that matters: below 1.0 the physics clock falls behind and the autopilot starts seeing late FDM frames.</p>
+    </div>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Configuration</th><th class="mono">RTF</th><th class="mono">Camera FPS</th><th class="mono">Gazebo CPU</th><th>Verdict</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Physics only, no cameras</td>
+            <td class="mono">1.00</td><td class="mono">&mdash;</td><td class="mono">1.3 cores</td>
+            <td><span class="chip low">Real time</span></td>
+          </tr>
+          <tr>
+            <td>One camera, 1280&times;720</td>
+            <td class="mono">0.92&ndash;0.95</td><td class="mono">20</td><td class="mono">5.9 cores</td>
+            <td><span class="chip low">Usable</span></td>
+          </tr>
+          <tr>
+            <td>Two cameras, 1280&times;720</td>
+            <td class="mono">0.44</td><td class="mono">7.8 each</td><td class="mono">5.0 cores</td>
+            <td><span class="chip high">Fails</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p class="note"><strong>Three conclusions.</strong> One camera at 720p is viable, but delivers <strong>20fps, not 30</strong> &mdash; the locked target is missed and needs revising to 720p20 (or 720p15 with margin). Two cameras are not merely slower, they are <strong>disqualifying</strong>: RTF 0.44 means the vehicle flies against a physics clock running at 44% of real time. And note the two-camera row uses <em>less</em> CPU than the one-camera row while performing far worse &mdash; rendering serialises per step, so the second camera doubles frame time rather than consuming another core.</p>
+      <p class="note">The consequence is the important part: <strong>the render gate is load-bearing, not an optimisation.</strong> Without it the rig cannot host two cameras at all. That inverts the earlier reading of this risk.</p>
+      <p class="note">Two things also passed ahead of schedule: the JSON FDM link came up unaided (<code>JSON control interface set to &hellip;:9002</code>, <code>JSON received:</code>), which is P1's core mechanism; and <code>--headless-rendering</code> initialised Ogre2 through EGL with no X server, as designed.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Evidence</p>
+      <h2>What was verified against the running stack</h2>
+    </div>
+    <div class="cards">
+
+      <article class="card">
+        <span class="tag">No rebuild needed</span>
+        <h3>SITL already speaks JSON</h3>
+        <p>The shipped <code>arducopter</code> binary has the JSON master FDM backend compiled in, and the entrypoint passes <code>--model</code> straight through. Switching to Gazebo physics is an environment variable, not a new autopilot image.</p>
+        <pre><code><span class="cm"># strings ./build/sitl/bin/arducopter</span>
+JSON master: socket reuseaddress failed&hellip;
+Setting Gazebo interface to %s:%d
+Starting SITL Gazebo
+
+<span class="cm"># /sitl-entrypoint.sh</span>
+exec ./build/sitl/bin/arducopter \
+  --model "<span class="hl">${SITL_MODEL}</span>" \
+  --serial0 "udpclient:${SITL_ADDR}:${SITL_PORT}"</code></pre>
+      </article>
+
+      <article class="card">
+        <span class="tag gap">Gap to cover</span>
+        <h3>The demo cams do two jobs</h3>
+        <p><code>demo_video_source.py</code> generates video <em>and</em> implements the camera protocol as component 103/104. Only the first job moves to Gazebo; the second must be kept.</p>
+        <pre><code><span class="cm">MAVLink surface that must survive:</span>
+CAMERA_INFORMATION
+CAMERA_SETTINGS
+VIDEO_STREAM_INFORMATION
+VIDEO_STREAM_STATUS
+MAV_CMD_REQUEST_MESSAGE
+MAV_CMD_VIDEO_START_STREAMING
+MAV_CMD_VIDEO_STOP_STREAMING</code></pre>
+      </article>
+
+      <article class="card">
+        <span class="tag gap">Bridge required</span>
+        <h3>The plugin emits bare RTP</h3>
+        <p><code>GstCameraPlugin</code> streams RTP/UDP H.264 to a host and port &mdash; it does not publish RTSP, and MediaMTX cannot ingest bare RTP without an SDP. A thin receiver republishes it.</p>
+        <pre><code><span class="cm">SDF parameters available:</span>
+&lt;udp_host&gt;   default 127.0.0.1
+&lt;udp_port&gt;   default 5600
+&lt;use_basic_pipeline&gt;
+&lt;use_cuda&gt;</code></pre>
+      </article>
+
+      <article class="card">
+        <span class="tag win">Halves the load</span>
+        <h3>One viewer, one camera</h3>
+        <p>Streams are never watched in parallel, and the client selects by connecting to a path. MediaMTX's on-demand hooks turn that into a render gate, so the peak cost is a single camera.</p>
+        <pre><code><span class="cm">today's demo cams advertise:</span>
+1280 x 720 @ 30fps, 2 Mbit/s
+vendor DRAGANFLY / model DF DEMO CAMERA
+<span class="cm">(identical strings on both cams)</span>
+
+<span class="cm">gazebo target: same, one at a time</span></code></pre>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Locked</p>
+      <h2>Decisions taken</h2>
+    </div>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Decision</th><th>Choice</th><th>Consequence</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Target host</td>
+            <td class="mono">Windows 11 / Docker Desktop</td>
+            <td>Mesa software rendering by default. Sets the frame budget and makes P0 mandatory.</td>
+          </tr>
+          <tr>
+            <td>Demo cameras</td>
+            <td class="mono">Kept, behind compose profiles</td>
+            <td><code>--profile demo</code> reproduces today bit-for-bit; <code>--profile gazebo</code> swaps in the new path. Nothing regresses.</td>
+          </tr>
+          <tr>
+            <td>MAVLink shim</td>
+            <td class="mono">Extend demo_video_source.py</td>
+            <td>New <code>--video-source rtp</code> swaps only ffmpeg's input stage. No protocol code is duplicated.</td>
+          </tr>
+          <tr>
+            <td>Camera layout</td>
+            <td class="mono">Forward + downward, fixed</td>
+            <td>Situational awareness plus a landing/position reference. No gimbal plumbing on the critical path.</td>
+          </tr>
+          <tr>
+            <td>Concurrency</td>
+            <td class="mono">One stream at a time</td>
+            <td>Selection happens at RTSP connect. Peak render load is one camera; idle costs physics only.</td>
+          </tr>
+          <tr>
+            <td>Render gating</td>
+            <td class="mono">Reader-count poll from gazebo</td>
+            <td>A camera sensor is enabled while its path has readers and disabled 10s after the last one leaves. No new MAVLink commands. (Originally MediaMTX <code>runOnDemand</code> hooks &mdash; dead on arrival, see B2.)</td>
+          </tr>
+          <tr>
+            <td>Stream target</td>
+            <td class="mono">1280&times;720 @ 30fps</td>
+            <td>Matches the demo cams exactly, so <code>VIDEO_WIDTH</code>/<code>VIDEO_HEIGHT</code> are untouched and DGCS sees no change. P0 must clear this bar.</td>
+          </tr>
+          <tr>
+            <td>Gazebo version</td>
+            <td class="mono">Harmonic (LTS)</td>
+            <td>Widest documentation and community coverage, which is what matters when P0 misbehaves. Fixes the base image and plugin build.</td>
+          </tr>
+          <tr>
+            <td>Camera identity</td>
+            <td class="mono">Configurable, distinct defaults</td>
+            <td><code>--camera-vendor</code> / <code>--camera-model</code> flags. Gazebo cams get their own names; demo cams unchanged. Revertible without a code change.</td>
+          </tr>
+          <tr>
+            <td>World</td>
+            <td class="mono">iris_runway, lightly dressed</td>
+            <td>The plugin's own reference world, plus landmarks for the downward view. Lowest-risk starting point.</td>
+          </tr>
+          <tr>
+            <td>Multi-instance</td>
+            <td class="mono">Parameterised, not yet tested</td>
+            <td>New ports get env vars from the start; only single-instance is verified through P4.</td>
+          </tr>
+          <tr>
+            <td>Image</td>
+            <td class="mono">ghcr.io/draganfly/gazebo-sitl</td>
+            <td>Dockerfile, worlds and models all in <code>gazebo/</code>; CI builds and pushes on tag. Editor and shipper are the same repo, so it cannot drift.</td>
+          </tr>
+          <tr>
+            <td>Sequencing</td>
+            <td class="mono">Spike first, then stages</td>
+            <td>P0 returns a GO/NO-GO and a frame budget that every later phase depends on.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Architecture</p>
+      <h2>What actually changes</h2>
+    </div>
+    <figure>
+      <div class="figbox">
+        <svg class="diagram" viewBox="0 0 900 690" role="img" aria-label="Comparison of the demo profile and the proposed Gazebo profile. The Gazebo profile inserts Gazebo ahead of the autopilot over a JSON FDM link, and inserts GstCameraPlugin ahead of ffmpeg over an RTP UDP link. A dashed control path runs back from the media server to Gazebo, enabling a camera only while a viewer is connected. The MAVLink camera protocol lane is identical in both profiles.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="ara" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent,#2F9E95)"/>
+            </marker>
+          </defs>
+
+          <text x="0" y="14" font-family="ui-monospace,Consolas,monospace" font-size="11" letter-spacing="1.6" fill="currentColor" opacity=".65">PROFILE: DEMO &#8212; TODAY</text>
+          <line x1="0" y1="24" x2="900" y2="24" stroke="currentColor" stroke-width="1" opacity=".25"/>
+
+          <text x="0" y="66" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="currentColor" opacity=".55">PHYSICS</text>
+          <rect x="90" y="44" width="210" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="195" y="62" text-anchor="middle" font-size="12.5" fill="currentColor">arducopter</text>
+          <text x="195" y="78" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="currentColor" opacity=".7">--model quad</text>
+          <line x1="300" y1="66" x2="404" y2="66" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar)" opacity=".75"/>
+          <text x="352" y="58" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="currentColor" opacity=".65">telemetry</text>
+          <rect x="410" y="44" width="150" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="485" y="71" text-anchor="middle" font-size="12.5" fill="currentColor">mavrouter</text>
+
+          <text x="0" y="156" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="currentColor" opacity=".55">PIXELS</text>
+          <rect x="90" y="134" width="210" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="195" y="152" text-anchor="middle" font-size="12.5" fill="currentColor">ffmpeg &#215;2, always on</text>
+          <text x="195" y="168" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="currentColor" opacity=".7">videotestsrc &#8594; libx264</text>
+          <line x1="300" y1="156" x2="404" y2="156" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar)" opacity=".75"/>
+          <text x="352" y="148" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="currentColor" opacity=".65">RTSP publish</text>
+          <rect x="410" y="134" width="150" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="485" y="161" text-anchor="middle" font-size="12.5" fill="currentColor">mediaserver</text>
+
+          <text x="0" y="246" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="currentColor" opacity=".55">MAVLINK</text>
+          <rect x="90" y="224" width="210" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="195" y="242" text-anchor="middle" font-size="12.5" fill="currentColor">cam1 &#183; cam2</text>
+          <text x="195" y="258" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="currentColor" opacity=".7">comp 103 / 104</text>
+          <line x1="300" y1="246" x2="404" y2="246" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar)" opacity=".75"/>
+          <text x="352" y="238" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="currentColor" opacity=".65">camera protocol</text>
+          <rect x="410" y="224" width="150" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="485" y="251" text-anchor="middle" font-size="12.5" fill="currentColor">mavrouter</text>
+
+          <text x="0" y="364" font-family="ui-monospace,Consolas,monospace" font-size="11" letter-spacing="1.6" fill="var(--accent,#2F9E95)">PROFILE: GAZEBO &#8212; PROPOSED</text>
+          <line x1="0" y1="374" x2="900" y2="374" stroke="var(--accent,#2F9E95)" stroke-width="1"/>
+
+          <text x="0" y="416" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="currentColor" opacity=".55">PHYSICS</text>
+          <rect x="90" y="394" width="210" height="44" rx="2" fill="var(--accent-soft,none)" stroke="var(--accent,#2F9E95)" stroke-width="1.6"/>
+          <text x="195" y="412" text-anchor="middle" font-size="12.5" fill="currentColor">gazebo &#8212; headless</text>
+          <text x="195" y="428" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="currentColor" opacity=".7">iris_runway + physics</text>
+          <line x1="300" y1="416" x2="404" y2="416" stroke="var(--accent,#2F9E95)" stroke-width="1.6" marker-end="url(#ara)"/>
+          <text x="352" y="401" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="var(--accent,#2F9E95)">JSON FDM</text>
+          <text x="352" y="412" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="var(--accent,#2F9E95)">:9002 :9003</text>
+          <rect x="410" y="394" width="180" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="500" y="412" text-anchor="middle" font-size="12.5" fill="currentColor">arducopter</text>
+          <text x="500" y="428" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="var(--accent,#2F9E95)">--model JSON</text>
+          <line x1="590" y1="416" x2="694" y2="416" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar)" opacity=".75"/>
+          <text x="642" y="408" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="currentColor" opacity=".65">telemetry</text>
+          <rect x="700" y="394" width="150" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="775" y="421" text-anchor="middle" font-size="12.5" fill="currentColor">mavrouter</text>
+
+          <text x="0" y="506" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="currentColor" opacity=".55">PIXELS</text>
+          <rect x="90" y="484" width="210" height="44" rx="2" fill="var(--accent-soft,none)" stroke="var(--accent,#2F9E95)" stroke-width="1.6"/>
+          <text x="195" y="502" text-anchor="middle" font-size="12.5" fill="currentColor">GstCameraPlugin</text>
+          <text x="195" y="518" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="currentColor" opacity=".7">one active at a time</text>
+          <line x1="300" y1="506" x2="404" y2="506" stroke="var(--accent,#2F9E95)" stroke-width="1.6" marker-end="url(#ara)"/>
+          <text x="352" y="491" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="var(--accent,#2F9E95)">RTP/UDP H.264</text>
+          <text x="352" y="502" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="var(--accent,#2F9E95)">:5600 :5601</text>
+          <rect x="410" y="484" width="180" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="500" y="502" text-anchor="middle" font-size="12.5" fill="currentColor">gzcam1 &#183; gzcam2</text>
+          <text x="500" y="518" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="var(--accent,#2F9E95)">ffmpeg -c:v copy</text>
+          <line x1="590" y1="506" x2="694" y2="506" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar)" opacity=".75"/>
+          <text x="642" y="498" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="currentColor" opacity=".65">RTSP publish</text>
+          <rect x="700" y="484" width="150" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="775" y="511" text-anchor="middle" font-size="12.5" fill="currentColor">mediaserver</text>
+
+          <path d="M 775 528 L 775 556 L 195 556 L 195 532" fill="none" stroke="var(--accent,#2F9E95)" stroke-width="1.4" stroke-dasharray="5 4" marker-end="url(#ara)"/>
+          <text x="485" y="550" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="var(--accent,#2F9E95)">camera_gate polls reader counts &#8594; enable that camera only</text>
+
+          <text x="0" y="626" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="currentColor" opacity=".55">MAVLINK</text>
+          <rect x="90" y="604" width="210" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="195" y="622" text-anchor="middle" font-size="12.5" fill="currentColor">gzcam1 &#183; gzcam2</text>
+          <text x="195" y="638" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="10.5" fill="currentColor" opacity=".7">comp 103 / 104</text>
+          <line x1="300" y1="626" x2="404" y2="626" stroke="currentColor" stroke-width="1.3" marker-end="url(#ar)" opacity=".75"/>
+          <text x="352" y="618" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="9.5" fill="currentColor" opacity=".65">camera protocol</text>
+          <rect x="410" y="604" width="150" height="44" rx="2" fill="none" stroke="currentColor" stroke-width="1.3" opacity=".75"/>
+          <text x="485" y="631" text-anchor="middle" font-size="12.5" fill="currentColor">mavrouter</text>
+          <text x="580" y="631" font-family="ui-monospace,Consolas,monospace" font-size="10" fill="currentColor" opacity=".6">&#8592; identical to today</text>
+        </svg>
+      </div>
+      <figcaption>The Gazebo profile inserts one hop into each of two lanes &mdash; Gazebo ahead of the autopilot over the JSON FDM link, and <code>GstCameraPlugin</code> ahead of ffmpeg over RTP. The dashed path is the new control edge: the media server tells Gazebo which camera to render, based on who is watching. The MAVLink camera-protocol lane is untouched, which is why the GCS needs no changes and the shim cannot be deleted.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Implementation</p>
+      <h2>Component by component</h2>
+    </div>
+
+    <div class="prose"><h3>1 &middot; Compose profiles</h3></div>
+    <pre><code>services:
+  autopilot:
+    environment:
+      <span class="cm"># demo keeps SITL_MODEL=quad; gazebo overrides it</span>
+      SITL_MODEL: ${SITL_MODEL:-quad}
+
+  cam1:   { profiles: [demo] }
+  cam2:   { profiles: [demo] }
+
+  gazebo:
+    profiles: [gazebo]
+    image: ghcr.io/draganfly/gazebo-sitl:${GZ_TAG:-latest}
+    ipv4_address: ${NET_PREFIX:-172.28}.0.30
+
+  gzcam1: { profiles: [gazebo] }   <span class="cm"># --video-source rtp --rtp-port ${GZ_CAM1_RTP_PORT:-5600}</span>
+  gzcam2: { profiles: [gazebo] }   <span class="cm"># --video-source rtp --rtp-port ${GZ_CAM2_RTP_PORT:-5601}</span></code></pre>
+
+    <div class="prose">
+      <h3>2 &middot; The camera shim gains three flags</h3>
+      <p class="note">Only ffmpeg's input stage changes. Because Gazebo already delivers H.264, the bridge copies the stream rather than re-encoding it &mdash; the largest CPU saving available on this box.</p>
+    </div>
+    <pre><code><span class="cm"># --video-source test (today, unchanged)</span>
+ffmpeg -re -f lavfi -i testsrc=... -c:v libx264 ... -f rtsp $RTSP_URI
+
+<span class="cm"># --video-source rtp (new)</span>
+ffmpeg -protocol_whitelist file,udp,rtp -i /tmp/gz_cam1.sdp \
+       <span class="hl">-c:v copy</span> -f rtsp $RTSP_URI
+
+<span class="cm"># identity, so the operator can tell the views apart</span>
+--camera-vendor DRAGANFLY --camera-model "DF SIM FORWARD"   <span class="cm"># gzcam1</span>
+--camera-vendor DRAGANFLY --camera-model "DF SIM DOWN"      <span class="cm"># gzcam2</span></code></pre>
+
+    <div class="prose">
+      <h3>3 &middot; Render only while watched</h3>
+      <p class="note">As built (the original <code>MTX_PATHS_*_RUNONDEMAND</code> hooks cannot work &mdash; see B2): <code>camera_gate.py</code> runs alongside <code>gz sim</code> in the gazebo container, polls MediaMTX's read-only API for each path's reader count, and drives the camera's enable topic through a persistent gz-transport publisher, re-publishing desired state every tick.</p>
+    </div>
+    <pre><code>mediaserver:
+  environment:
+    MTX_API: "yes"                                  <span class="cm"># read-only HTTP API on :9997</span>
+    MTX_AUTHINTERNALUSERS_1_IPS: 172.28.0.0/16      <span class="cm"># let the sim subnet query it</span>
+
+gazebo:                                             <span class="cm"># camera_gate.py, every 2s:</span>
+  <span class="cm">GET /v3/paths/get/cam1  -&gt; readers &gt; 0  -&gt; /cam1/enable = true   (immediately)</span>
+  <span class="cm">                        -&gt; readers == 0 -&gt; /cam1/enable = false  (after 10s hold)</span>
+
+<span class="cm">nobody connected  -&gt; no camera renders, physics only</span>
+<span class="cm">one reader        -&gt; exactly one camera renders</span></code></pre>
+
+    <div class="prose"><h3>4 &middot; SDF model</h3></div>
+    <pre><code>iris_with_standoffs
+ |- camera_front   pose: 0.10 0  0.05   0 0 0      1280x720 @ 30
+ |    |- GstCameraPlugin  &lt;udp_port&gt;5600&lt;/udp_port&gt;
+ |- camera_down    pose: 0.00 0 -0.03   0 1.5708 0  1280x720 @ 30
+      |- GstCameraPlugin  &lt;udp_port&gt;5601&lt;/udp_port&gt;
+
+<span class="cm">&lt;update_rate&gt; is decoupled from the physics step &mdash; see risk R4</span></code></pre>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Sequence</p>
+      <h2>Phases</h2>
+    </div>
+    <div class="gate">
+      <p class="eyebrow">Gate</p>
+      <p>P0 is a throwaway measurement, not a deliverable. The bar is now one camera at 1280&times;720 @ 30fps, not two &mdash; but if this box cannot hold it, the resolution, frame rate and world dressing are renegotiated before any of them are built.</p>
+    </div>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th>Phase</th><th>Work</th><th>Done when</th><th class="mono">Est.</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="phase-id">P0</td>
+            <td><strong>Rendering spike.</strong> Time <code>gz sim -s</code> headless with a single camera sensor at 720p30. Compare Mesa llvmpipe against the WSL <code>d3d12</code> path. Confirm a disabled sensor really costs nothing.</td>
+            <td>GO/NO-GO on 720p30 for one camera, plus a measured idle cost with no camera enabled.</td>
+            <td class="mono">1&ndash;2d</td>
+          </tr>
+          <tr>
+            <td class="phase-id">P1</td>
+            <td><strong>Physics only.</strong> Gazebo service on Harmonic, JSON FDM link, <code>SITL_MODEL=JSON</code>. No cameras at all.</td>
+            <td>Vehicle arms and flies in QGC on Gazebo physics; existing telemetry and <code>serial</code> unaffected.</td>
+            <td class="mono">2&ndash;3d</td>
+          </tr>
+          <tr>
+            <td class="phase-id">P2</td>
+            <td><strong>One camera end-to-end.</strong> Forward camera, <code>GstCameraPlugin</code>, SDP, the <code>--video-source rtp</code> bridge, identity flags.</td>
+            <td><code>rtsp://&hellip;/cam1</code> shows the Gazebo view and QGC discovers it via the unchanged camera protocol.</td>
+            <td class="mono">2&ndash;3d</td>
+          </tr>
+          <tr>
+            <td class="phase-id">P3</td>
+            <td><strong>Second camera and on-demand switching.</strong> Downward sensor, second bridge, MediaMTX <code>runOnDemand</code> hooks wired to the enable topics.</td>
+            <td>Connecting to <code>/cam1</code> or <code>/cam2</code> renders only that camera; disconnecting returns the rig to physics-only cost.</td>
+            <td class="mono">2d</td>
+          </tr>
+          <tr>
+            <td class="phase-id">P4</td>
+            <td><strong>Ship it.</strong> CI build-and-push on tag, README section, <code>.env.example</code> variables, troubleshooting rows.</td>
+            <td>A clean checkout runs <code>--profile gazebo</code> with no local build.</td>
+            <td class="mono">1&ndash;2d</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Risk</p>
+      <h2>What could go wrong</h2>
+    </div>
+    <div class="tw">
+      <table>
+        <thead>
+          <tr><th class="mono">#</th><th>Risk</th><th>Severity</th><th>Mitigation</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mono">R1</td>
+            <td>Software rendering cannot hold 720p30 even for a single camera.</td>
+            <td><span class="chip med">Confirmed</span></td>
+            <td><strong>Materialised, partially.</strong> P0 measured 20fps at 720p for one camera, not 30 &mdash; resolution holds, frame rate does not. Revise the target to 720p20, or 720p15 for margin. Not fatal: 20fps is usable for navigation.</td>
+          </tr>
+          <tr>
+            <td class="mono">R2</td>
+            <td>The WSL <code>d3d12</code> accelerated path may not expose <code>/dev/dxg</code> usefully to Docker Desktop containers on an AMD iGPU.</td>
+            <td><span class="chip med">Medium</span></td>
+            <td>Treated as upside, not baseline. The plan assumes llvmpipe; d3d12 is tested in P0 and adopted only if it wins.</td>
+          </tr>
+          <tr>
+            <td class="mono">R3</td>
+            <td>H.264 caps from the plugin may not survive <code>-c:v copy</code> into MediaMTX, forcing a re-encode.</td>
+            <td><span class="chip med">Medium</span></td>
+            <td>Verified in P2 with a static SDP. If passthrough fails, fall back to re-encode and re-check the budget against P0.</td>
+          </tr>
+          <tr>
+            <td class="mono">R4</td>
+            <td>Slow rendering starves the physics step, so SITL sees late FDM frames and flight behaviour degrades.</td>
+            <td><span class="chip high">Confirmed</span></td>
+            <td><strong>Real and measured.</strong> Two cameras drop RTF to 0.44; one camera holds 0.92&ndash;0.95; no cameras 1.00. Rendering does gate the FDM loop. The only mitigation that works is keeping exactly one camera rendering &mdash; which makes the render gate mandatory, not optional.</td>
+          </tr>
+          <tr>
+            <td class="mono">R5</td>
+            <td>On-demand start latency: enabling the sensor, waiting for a keyframe and publishing could leave the first seconds after connect blank, or trip a client timeout.</td>
+            <td><span class="chip med">Medium</span></td>
+            <td><strong>Materialised, twice, and fixed.</strong> The reader that triggers the placeholder&rarr;RTP switch is dropped <em>by</em> that switch, and the RTP publisher takes ~4&ndash;5s to come up (measured via mediamtx's session log) &mdash; reverting on a single zero-reader poll made the switch impossible and the stream flapped forever. Fixed with two symmetric holds: the camera gate keeps a camera enabled for 10s of continuous zero readers (<code>GZ_CAMERA_GATE_DISABLE_HOLD</code>), and the bridge holds RTP mode for 10s of zero readers before reverting (<code>GZ_CAM_RTP_REVERT_HOLD</code>). A reconnecting viewer converges to the real 720p stream in ~10s and holds indefinitely.</td>
+          </tr>
+          <tr>
+            <td class="mono">R6</td>
+            <td>New 2&ndash;4 GB image is a slow first pull and a new artifact to maintain.</td>
+            <td><span class="chip low">Low</span></td>
+            <td>Pinned tag, layer-ordered Dockerfile, CI build on tag. Only the gazebo profile pulls it; demo users never do.</td>
+          </tr>
+          <tr>
+            <td class="mono">R7</td>
+            <td>New ports (9002/9003, 5600/5601) collide when running side-by-side instances.</td>
+            <td><span class="chip low">Low</span></td>
+            <td>Parameterised from the start. None are published to the host, so collisions only matter inside a shared network. Multi-instance stays unverified until someone needs it.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="prose">
+      <p class="note"><strong>One risk that is absent:</strong> the RTP hop from Gazebo to the bridge never crosses the Docker Desktop host boundary, so the documented host&harr;container UDP flakiness does not apply to it. Container-to-container UDP on the <code>sim</code> network is reliable.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <p class="eyebrow">Blockers &mdash; all resolved</p>
+      <h2>What stood between here and P3</h2>
+    </div>
+    <div class="prose">
+      <p class="note">Both blockers materialised as predicted &mdash; and each needed a second iteration after its first fix failed against the live stack. The details live in <code>gazebo/README.md</code> (&ldquo;Resolved the hard way&rdquo;); the short version:</p>
+      <ul>
+        <li><strong>B1 &mdash; resolved, on the second attempt.</strong> The patch makes the plugin's image-topic subscription follow the enable state, so a disabled camera has zero subscribers and gz-sensors skips its render. The first version toggled the subscription <em>inside</em> the enable-topic callback; re-entering gz-transport from its own callback thread intermittently wedged message dispatch, and enables/disables were lost for minutes under reader-driven flapping. v2 records desired state in the callback and reconciles on the simulation thread in <code>PreUpdate()</code> &mdash; idempotent, so the gate re-publishes state every tick and any lost message heals within one.</li>
+        <li><strong>B2 &mdash; resolved as designed, plus one discovery.</strong> The inverted trigger works: <code>camera_gate.py</code> polls MediaMTX's <code>:9997</code> API from the gazebo container and toggles the cameras itself. The discovery: one-shot <code>gz topic -p</code> publishes are droppable (each spawn re-races publisher discovery), so the gate holds persistent <code>gz.transport13</code> python publishers instead &mdash; measured end of the lost-message failures.</li>
+        <li><strong>Still open &mdash; the <code>d3d12</code> path.</strong> <code>d3d12_dri.so</code> is present in the image, so the accelerated route exists but is untested. It remains the one lever that could restore 30fps, or make two simultaneous cameras viable at all.</li>
+      </ul>
+    </div>
+  </section>
+
+  <footer>
+    <p>Verified working end-to-end against the running <code>sim1</code> stack: SITL flies on Gazebo physics over the JSON FDM link; a reconnecting RTSP viewer on <code>/cam1</code> or <code>/cam2</code> converges to the real 1280&times;720 stream in ~10s and holds; RTF 0.9&ndash;1.0 with one camera rendering, 1.0 idle; both cameras disable within ~10&ndash;20s of the last reader leaving. Remaining: push the image on the first <code>gazebo-v*</code> tag (P4).</p>
+    <p>Sources: <a href="https://github.com/ArduPilot/ardupilot_gazebo">ArduPilot/ardupilot_gazebo</a> &middot; <a href="https://ardupilot.org/dev/docs/sitl-with-gazebo.html">Using SITL with Gazebo</a> &middot; <a href="https://gazebosim.org/api/sim/8/ardupilot.html">Gazebo Sim: migrating the ArduPilot ModelPlugin</a>. Local evidence gathered against the running <code>sim1</code> stack.</p>
+  </footer>
+
+</div>

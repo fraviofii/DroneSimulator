@@ -1,0 +1,9 @@
+.claude/settings.local.json
+CLAUDE.local.md
+.venv
+certs/
+__pycache__
+*.pyc
+tools/.rtsp_cams/
+.env
+tools/
