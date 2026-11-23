@@ -312,16 +312,16 @@
       enable_topic is set explicitly to /cam1/enable and /cam2/enable per
       this task's shared contract. Left at its default, GstCameraPlugin
       derives "<sensor's auto-assigned gz topic>/enable_streaming" instead
-      (verified in GstCameraPlugin.cc) — a name MediaMTX's runOnDemand hook
-      can't predict without duplicating Gazebo's own topic-scoping logic, so
-      the override is required, not cosmetic.
+      (verified in GstCameraPlugin.cc) — a name the render gate
+      (docker/camera_gate.py) can't predict without duplicating Gazebo's own
+      topic-scoping logic, so the override is required, not cosmetic.
 
-      use_basic_pipeline is REQUIRED for the plan's RTP/SDP video bridge:
+      use_basic_pipeline is REQUIRED for camera_gate.py's RTSP mounts:
       left unset, GstCameraPlugin's default pipeline is MPEG-TS-over-UDP
       (mpegtsmux, verified in GstCameraPlugin.cc's CreateMpeg2tsPipeline()),
       not bare RTP. Only use_basic_pipeline=true selects
-      CreateGenericPipeline() (rtph264pay + udpsink), which is what the
-      demo_video_source.py rtp-source bridge expects to receive.
+      CreateGenericPipeline() (rtph264pay + udpsink), which is what those
+      mounts (udpsrc ! rtph264depay) expect to receive.
 
       always_on is 0 (B1, see gazebo-sitl-plan.html "Blockers"): the whole
       point of the render gate is that a disabled camera costs nothing, and

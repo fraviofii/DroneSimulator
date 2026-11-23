@@ -11,9 +11,13 @@ full design; this file only covers what lives in this directory.
   commit for reproducible builds. Mesa/EGL (`llvmpipe`) provides software
   rendering; `gz sim --headless-rendering` uses that path directly (no Xvfb).
 - `docker/entrypoint.sh` — renders `models/iris_dual_cam/model.sdf.template`
-  into a runtime SDF (the RTP destinations and FDM bind port are per-instance
-  env vars, so they can't be baked into the image) and launches
-  `gz sim -s -r --headless-rendering worlds/iris_runway.sdf`.
+  into a runtime SDF (the RTP ports and FDM bind port are per-instance env
+  vars, so they can't be baked into the image) and launches
+  `gz sim -s -r --headless-rendering worlds/iris_runway.sdf` alongside
+  `camera_gate.py`.
+- `docker/camera_gate.py` — serves each camera's RTP as an on-demand RTSP
+  mount (`:8554/cam1`, `/cam2`; read by `dfvideo-gazebo`) and enables a
+  camera only while its mount has a client (the render gate).
 - `worlds/iris_runway.sdf` — ardupilot_gazebo's stock `iris_runway` world,
   swapping its `iris_with_gimbal` payload for `model://iris_dual_cam` and
   adding six static boxes/cones near the pad as landmarks for the downward
@@ -21,7 +25,8 @@ full design; this file only covers what lives in this directory.
 - `models/iris_dual_cam/` — an Iris quadcopter (`iris_with_standoffs`
   airframe) with two **fixed** cameras instead of a gimbal: `camera_front`
   and `camera_down`, each running its own `GstCameraPlugin` instance
-  streaming RTP/H.264 to a separate host:port (`gzcam1`/`gzcam2` in compose).
+  streaming RTP/H.264 to its own UDP port on `127.0.0.1`, where
+  `camera_gate.py` picks it up.
   Ships `model.sdf.template`, not `model.sdf` — see entrypoint.sh above.
 
 ## Non-obvious things
@@ -36,11 +41,11 @@ full design; this file only covers what lives in this directory.
   something on the `autopilot` service's side, not this model.
 - **`<use_basic_pipeline>true</use_basic_pipeline>` is load-bearing, not
   optional.** Without it, `GstCameraPlugin` defaults to an MPEG-TS/UDP
-  pipeline instead of bare RTP, which is not what the `--video-source rtp`
-  bridge in `support-tools` expects.
+  pipeline instead of bare RTP, which is not what `camera_gate.py`'s
+  `udpsrc ! rtph264depay` mounts expect.
 - **`enable_topic` is set explicitly to `/cam1/enable` and `/cam2/enable`.**
   Left unset, the plugin derives `<sensor's gz topic>/enable_streaming`
-  instead, a name MediaMTX's `runOnDemand` hook can't predict.
+  instead, a name `camera_gate.py` can't predict.
 - **Line endings matter here.** This repo's Windows checkout uses
   `core.autocrlf=true` with no `.gitattributes`; `docker/entrypoint.sh` must
   stay LF (`\n`) on disk, or its shebang breaks inside the Linux container.
@@ -79,3 +84,25 @@ full design; this file only covers what lives in this directory.
   `LIBGL_ALWAYS_SOFTWARE`/`GALLIUM_DRIVER` env needed — verified against
   the running container (cameras render; one 720p camera ≈ 20 fps, RTF
   0.92–0.95).
+- **The media server is gone; so are the workarounds below it.** The
+  cameras used to be bridged into MediaMTX by `gzcam1`/`gzcam2`
+  (ffmpeg, `support-tools/demo_video_source.py --video-source rtp`), with
+  this container polling MediaMTX's HTTP API for reader counts. That needed
+  a bootstrap placeholder publisher (MediaMTX reports no reader on a path
+  with no publisher, and the camera wouldn't publish without a reader) and
+  `alwaysAvailable` paths (next item). `camera_gate.py` now serves the RTSP
+  mounts itself, so a mount exists whether or not its camera renders, the
+  gate's input is the mount's own media lifecycle, and the enable happens
+  before the first DESCRIBE prerolls. dfvideo (`dfvideo-gazebo`) forwards
+  the mounts to the GCS. Kept for the record:
+- **Every placeholder↔RTP switch dropped the viewer, so a GCS never saw
+  Gazebo video.** *(MediaMTX era.)* `gzcam` switches feeds by restarting its ffmpeg RTSP
+  publisher, and MediaMTX tears down every reader on a path when its
+  publisher goes away. The reader that triggered the switch was killed by
+  it; a GCS that didn't re-attach within `GZ_CAM_RTP_REVERT_HOLD` saw the
+  stream flap back to the placeholder forever. Fixed in compose by setting
+  `alwaysAvailable` on the `cam1`/`cam2` paths (`MTX_PATHS_CAMn_*`):
+  MediaMTX plays a built-in offline H.264 segment between publishers and
+  keeps readers attached. Viewers therefore see an in-stream resolution
+  change (offline 1920x1080 / placeholder → 720p camera), which ffmpeg and
+  GStreamer decoders handle.

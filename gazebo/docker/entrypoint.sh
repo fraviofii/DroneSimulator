@@ -4,8 +4,9 @@
 # sensors actually produce frames.
 #
 # The model is templated rather than static because GstCameraPlugin's
-# <udp_host>/<udp_port> (where it sends RTP) and ArduPilotPlugin's
-# <fdm_port_in> depend on NET_PREFIX and the per-instance port map — the same
+# <udp_host>/<udp_port> (where it sends RTP -- camera_gate.py's RTSP mounts in
+# this container, 127.0.0.1 by default) and ArduPilotPlugin's <fdm_port_in>
+# depend on the per-instance port map — the same
 # reason docker-compose.yaml itself is all env-var defaults (see CLAUDE.md).
 # Baking one instance's addresses into the image would break every other
 # instance running side by side on this host.
@@ -24,9 +25,9 @@ cp "${MODEL_SRC}/model.config" "${MODEL_RUNTIME}/model.config"
 # silently corrupts the file if one is ever added).
 export GZ_FDM_ADDR="${GZ_FDM_ADDR:-0.0.0.0}"
 export GZ_FDM_IN_PORT="${GZ_FDM_IN_PORT:-9002}"
-export GZ_CAM1_HOST="${GZ_CAM1_HOST:-172.28.0.31}"
+export GZ_CAM1_HOST="${GZ_CAM1_HOST:-127.0.0.1}"
 export GZ_CAM1_RTP_PORT="${GZ_CAM1_RTP_PORT:-5600}"
-export GZ_CAM2_HOST="${GZ_CAM2_HOST:-172.28.0.32}"
+export GZ_CAM2_HOST="${GZ_CAM2_HOST:-127.0.0.1}"
 export GZ_CAM2_RTP_PORT="${GZ_CAM2_RTP_PORT:-5601}"
 
 envsubst \
@@ -39,19 +40,18 @@ envsubst \
 # image at build time.
 export GZ_SIM_RESOURCE_PATH="/run/gazebo/models:${GZ_SIM_RESOURCE_PATH:-}"
 
-# Render gate (see gazebo/gazebo-sitl-plan.html, blocker B2): mediamtx can't
-# run a `gz topic ...` runOnDemand hook itself (FROM scratch, no shell, no gz
-# CLI -- "exec: file not found"), so this container polls mediamtx's HTTP API
-# instead and toggles its own cameras. It runs alongside gz sim, not chained
-# to it via `exec` (bash can only `wait` on its own direct children, so both
-# have to be started as background jobs of *this* shell for the supervision
-# below to observe either one exiting):
+# Camera RTSP server + render gate (camera_gate.py): serves each camera's RTP
+# as an on-demand RTSP mount and enables a camera only while its mount has a
+# client (dfvideo-gazebo, i.e. a GCS watching). It runs alongside gz sim, not
+# chained to it via `exec` (bash can only `wait` on its own direct children,
+# so both have to be started as background jobs of *this* shell for the
+# supervision below to observe either one exiting):
 #   - if gz sim exits, the container's lifecycle is gz sim's -- tear down
 #     camera_gate.py too and propagate gz sim's exit status.
-#   - if camera_gate.py dies first, gz sim must keep running (losing the
-#     render gate is not fatal to the sim, just to the CPU budget), but the
-#     loss must not go unnoticed -- log it loudly to stderr (`docker logs`)
-#     the moment it happens, then keep waiting on gz sim as normal.
+#   - if camera_gate.py dies first, gz sim must keep running (physics and the
+#     autopilot link don't depend on it), but camera video is gone with it,
+#     so the loss must not go unnoticed -- log it loudly to stderr
+#     (`docker logs`) the moment it happens, then keep waiting on gz sim.
 python3 /opt/gazebo/camera_gate.py &
 CAMERA_GATE_PID=$!
 
@@ -89,7 +89,7 @@ set -e
 
 if kill -0 "${GZ_PID}" 2>/dev/null; then
   # gz sim is still alive, so camera_gate.py must be the one that exited.
-  echo "entrypoint.sh: camera_gate.py exited (status ${FIRST_EXIT}) -- the render gate is no longer active; cameras will stay at whichever enable state they were last set to. gz sim keeps running." >&2
+  echo "entrypoint.sh: camera_gate.py exited (status ${FIRST_EXIT}) -- camera RTSP mounts and the render gate are gone (no camera video); cameras stay at whichever enable state they were last set to. gz sim keeps running." >&2
   wait "${GZ_PID}"
   exit $?
 fi

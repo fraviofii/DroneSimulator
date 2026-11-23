@@ -1,7 +1,8 @@
 # Headless Gazebo Harmonic + ardupilot_gazebo, built for the "gazebo" compose
 # profile (see gazebo/gazebo-sitl-plan.html). Runs `gz sim -s` (server only,
 # no GUI) driving ArduPilot SITL over the JSON FDM link, rendering camera
-# frames through GstCameraPlugin straight to RTP/UDP.
+# frames through GstCameraPlugin to RTP/UDP on localhost, served as on-demand
+# RTSP by camera_gate.py.
 #
 # Ubuntu 24.04 (noble) is the base ONLY because Gazebo Harmonic (the locked
 # LTS release) ships apt binaries for jammy/noble but not for a slim/distro-
@@ -14,7 +15,7 @@ FROM ubuntu:24.04
 # Gazebo's own apt repository (packages.osrfoundation.org). Ubuntu's default
 # noble repos do not carry gz-sim8/Harmonic; the OSRF repo is the only source
 # for the `gz-harmonic` metapackage (server + `gz` CLI, incl. `gz topic`,
-# which MediaMTX's runOnDemand hook shells out to) and for libgz-sim8-dev
+# camera_gate.py's fallback publisher) and for libgz-sim8-dev
 # (headers ardupilot_gazebo's CMake needs to compile its plugins against).
 # Steps verified against https://gazebosim.org/docs/harmonic/install_ubuntu/.
 RUN apt-get update \
@@ -78,7 +79,13 @@ RUN apt-get update \
         libgl1-mesa-dri libegl1 mesa-utils \
         gettext-base \
         python3-gz-transport13 python3-gz-msgs10 \
+        python3-gi gir1.2-gst-rtsp-server-1.0 gir1.2-gst-plugins-base-1.0 \
     && rm -rf /var/lib/apt/lists/*
+# python3-gi + gir1.2-gst-rtsp-server-1.0 (+ the plugins-base typelibs its
+# GstRtsp/GstSdp dependencies need) are camera_gate.py's RTSP server: it
+# serves each camera's RTP as an on-demand mount that dfvideo-gazebo reads.
+# The elements it links (udpsrc, rtph264depay/pay: good; h264parse: bad) are
+# installed above for GstCameraPlugin already.
 # python3-gz-transport13/-msgs10 back camera_gate.py's persistent enable-topic
 # publishers. They were present transitively anyway (via the gz dev packages),
 # but the gate degrades to a racy per-message `gz topic` fallback without
@@ -141,14 +148,9 @@ COPY worlds/ /opt/gazebo/worlds/
 COPY models/ /opt/gazebo/models-src/
 ENV GZ_SIM_RESOURCE_PATH=/opt/gazebo/worlds:${GZ_SIM_RESOURCE_PATH}
 
-# The render gate (B2, see gazebo-sitl-plan.html "Blockers"). MediaMTX is
-# built FROM scratch and execs runOnDemand hooks with no shell, so it cannot
-# invoke `gz topic` itself; instead this container polls mediamtx's HTTP API
-# and toggles its own cameras. entrypoint.sh runs it alongside `gz sim`.
-# python3 is already present transitively (verified: /usr/bin/python3, pulled
-# in by the gz-harmonic/dev packages above) and the script is stdlib-only, so
-# nothing extra is installed — but it is a transitive dependency, so if a
-# future apt change drops python3 this COPY is the thing that breaks.
+# Camera RTSP server + render gate (successor of the B2 fix, see
+# gazebo-sitl-plan.html "Blockers"; camera_gate.py's docstring has the
+# history). entrypoint.sh runs it alongside `gz sim`.
 COPY docker/camera_gate.py /opt/gazebo/camera_gate.py
 
 COPY docker/entrypoint.sh /entrypoint.sh
@@ -162,9 +164,9 @@ RUN chmod +x /entrypoint.sh
 # image still comes up in a sane single-instance configuration.
 ENV GZ_FDM_ADDR=0.0.0.0 \
     GZ_FDM_IN_PORT=9002 \
-    GZ_CAM1_HOST=172.28.0.31 \
+    GZ_CAM1_HOST=127.0.0.1 \
     GZ_CAM1_RTP_PORT=5600 \
-    GZ_CAM2_HOST=172.28.0.32 \
+    GZ_CAM2_HOST=127.0.0.1 \
     GZ_CAM2_RTP_PORT=5601 \
     GZ_VERBOSITY=1
 
