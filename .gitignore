@@ -6,4 +6,4 @@ __pycache__
 *.pyc
 tools/.rtsp_cams/
 .env
-tools/
+captures/
