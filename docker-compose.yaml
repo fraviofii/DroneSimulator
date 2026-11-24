@@ -86,8 +86,37 @@ services:
       # which ArduPilot's "udpclient:ADDR:PORT" parser cannot handle.
       SITL_ADDR: ${NET_PREFIX:-172.28}.0.10
       SITL_PORT: "24042"
+      # Home position "lat,lon,alt,heading". Empty = the home of the site
+      # world selected by worldgen (its site_info.json sitl_home), or SITL's
+      # own default when no site is configured. It must match the world's
+      # origin, or the GPS position and the Gazebo scene disagree.
+      SITL_HOME: ${SITL_HOME:-}
+      SITE_ACTIVE: /opt/gazebo/sites/.active-${COMPOSE_PROJECT_NAME:-sim1}
+    volumes:
+      - ./gazebo/sites:/opt/gazebo/sites:ro
+    # Wraps the image's /sitl-entrypoint.sh to add --home; `command` holds
+    # the image's own default arguments (-w: wipe EEPROM on start), which an
+    # entrypoint override would otherwise drop.
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        home="$${SITL_HOME:-}"
+        if [ -z "$$home" ] && [ -f "$$SITE_ACTIVE" ]; then
+          home="$$(sed -n 's/^SITL_HOME=//p' "$$SITE_ACTIVE")"
+        fi
+        if [ -n "$$home" ]; then
+          echo "SITL home: $$home"
+          exec /sitl-entrypoint.sh "$$@" --home "$$home"
+        fi
+        exec /sitl-entrypoint.sh "$$@"
+      - sitl
+    command: ["-w"]
     depends_on:
-      - mavrouter
+      mavrouter:
+        condition: service_started
+      worldgen:
+        condition: service_completed_successfully
 
   # ------------------------------------------------------------ gazebo ---
   # Headless Gazebo Harmonic physics + a forward and a down camera.
@@ -121,6 +150,50 @@ services:
       GZ_CAMERA_GATE_PATHS: ${GZ_CAMERA_GATE_PATHS:-cam1:/cam1/enable,cam2:/cam2/enable}
       # gz sim console verbosity 0-4; 3+ shows GstCameraPlugin's own lines.
       GZ_VERBOSITY: ${GZ_VERBOSITY:-1}
+      # World to load. Empty = the site worldgen selected for SITE_LAT/
+      # SITE_LON (read from GZ_SITE_ACTIVE), or the built-in iris_runway when
+      # no site is configured. Set it to force a world, e.g.
+      # /opt/gazebo/sites/<name>/worlds/<name>.sdf; SITL_HOME must then be
+      # that site's origin.
+      GZ_WORLD: ${GZ_WORLD:-}
+      GZ_SITE_ACTIVE: /opt/gazebo/sites/.active-${COMPOSE_PROJECT_NAME:-sim1}
+    volumes:
+      - ./gazebo/sites:/opt/gazebo/sites:ro
+    depends_on:
+      worldgen:
+        condition: service_completed_successfully
+
+  # One-shot startup step: generates (or reuses) the georeferenced site world
+  # for SITE_LAT/SITE_LON in .env with gazebo/make_gz_world.py -- aerial
+  # imagery ground, optional SRTM terrain, OSM / Microsoft buildings, OSM
+  # trees -- into ./gazebo/sites/<name>/, then writes the selection file
+  # gazebo and autopilot read (world path + SITL home). Generation needs
+  # internet access and runs only when the site is missing or its inputs
+  # changed; with no location set it just selects the built-in runway.
+  # Logs: `docker compose logs worldgen`. See gazebo/sites/README.md.
+  worldgen:
+    build: ./gazebo/worldgen
+    image: gazebo-worldgen:latest
+    restart: "no"
+    networks:
+      - sim
+    volumes:
+      - ./gazebo/make_gz_world.py:/app/make_gz_world.py:ro
+      - ./gazebo/worldgen/prepare_site.py:/app/prepare_site.py:ro
+      - ./gazebo/sites:/sites
+      # Microsoft building-footprint tiles (~30 MB each), kept between runs.
+      - worldgen-cache:/root/.cache
+    environment:
+      SITE_LAT: ${SITE_LAT:-}
+      SITE_LON: ${SITE_LON:-}
+      SITE_NAME: ${SITE_NAME:-}
+      SITE_RADIUS: ${SITE_RADIUS:-50}
+      SITE_TERRAIN: ${SITE_TERRAIN:-1}
+      SITE_EXTRA_ARGS: ${SITE_EXTRA_ARGS:-}
+      SITE_REGENERATE: ${SITE_REGENERATE:-0}
+      SITES_DIR: /sites
+      # Per compose project, so two instances can fly different sites.
+      ACTIVE_FILE: /sites/.active-${COMPOSE_PROJECT_NAME:-sim1}
 
   # MAVLink Camera Protocol v2 components (--video-source none: they publish
   # no video, MediaMTX proxies it straight from the gazebo container). They
@@ -234,3 +307,6 @@ networks:
         - subnet: ${NET_PREFIX:-172.28}.0.0/16
           ip_range: ${NET_PREFIX:-172.28}.5.0/24
         - subnet: ${NET6_SUBNET:-fd00:df:5117::/64}
+
+volumes:
+  worldgen-cache:

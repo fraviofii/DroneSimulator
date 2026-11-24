@@ -7,3 +7,7 @@ __pycache__
 tools/.rtsp_cams/
 .env
 captures/
+# worldgen's per-instance selection files and in-progress builds
+gazebo/sites/.active-*
+gazebo/sites/.*.tmp/
+gazebo/sites/*/

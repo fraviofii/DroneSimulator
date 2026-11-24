@@ -4,3 +4,8 @@ pymavlink==2.4.49
 boto3>=1.34.0
 botocore[crt]>=1.34.0
 paho-mqtt>=1.6.1
+# gazebo/make_gz_world.py (site world generator, when run by hand; the
+# worldgen compose service has its own image)
+requests>=2.31
+pillow>=10.0
+numpy>=1.26

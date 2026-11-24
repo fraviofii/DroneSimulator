@@ -17,3 +17,11 @@
 Dockerfile  text eol=lf
 .env*       text eol=lf
 *.patch     text eol=lf
+
+# Generated Gazebo site worlds (gazebo/make_gz_world.py): meshes/materials are
+# read by gz inside the container; STL may be binary, textures are images.
+*.obj       text eol=lf
+*.mtl       text eol=lf
+*.config    text eol=lf
+*.stl       binary
+*.png       binary

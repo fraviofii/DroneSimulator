@@ -13,8 +13,18 @@ full design; this file only covers what lives in this directory.
 - `docker/entrypoint.sh` — renders `models/iris_dual_cam/model.sdf.template`
   into a runtime SDF (the RTP ports and FDM bind port are per-instance env
   vars, so they can't be baked into the image) and launches
-  `gz sim -s -r --headless-rendering worlds/iris_runway.sdf` alongside
+  `gz sim -s -r --headless-rendering` on the selected world (`GZ_WORLD`, else
+  the site `worldgen` selected, else `worlds/iris_runway.sdf`) alongside
   `camera_gate.py`.
+- `make_gz_world.py` — generates a georeferenced site world (aerial-imagery
+  ground, optional SRTM terrain, OSM / Microsoft buildings, OSM trees) around
+  a lat/lon into `sites/<name>/`. Not part of the image.
+- `worldgen/` — the one-shot `worldgen` compose service: runs
+  `make_gz_world.py` for `SITE_LAT`/`SITE_LON` from `.env` at startup (only
+  when the site is missing or changed) and selects it for `gazebo` and the
+  autopilot's SITL home.
+- `sites/` — the generated site worlds, bind-mounted by compose (not baked
+  into the image). See `sites/README.md`.
 - `docker/camera_gate.py` — serves each camera's RTP as an on-demand RTSP
   mount (`:8554/cam1`, `/cam2`; read by `dfvideo-gazebo`) and enables a
   camera only while its mount has a client (the render gate).
